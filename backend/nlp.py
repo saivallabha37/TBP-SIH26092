@@ -6,7 +6,8 @@ def extract_purpose(text: str) -> str:
     text = text.lower()
 
     if any(word in text for word in [
-        "business", "shop", "tailoring", "enterprise"
+        "business", "shop", "tailoring", "enterprise",
+    "bakery", "salon", "workshop", "manufacturing"
     ]):
         return "business"
 
@@ -70,21 +71,23 @@ def extract_financial_details(text: str) -> dict:
         "annual_family_income": None,
     }
 
+    
     patterns = {
         "project_cost": (
-            r"(?:project cost|project costs|project will cost)"
-            r"\s*(?:is|of|around|about|approximately)?\s*"
+            r"(?:project cost|project costs|project will cost|budget)"
+            r"\s*(?:is|of|will be|around|about|approximately)?\s*"
             r"(?:₹|rs\.?\s*)?"
             r"(\d[\d,]*(?:\.\d+)?\s*(?:lakhs?|lacs?|thousand|k)?)"
         ),
         "annual_family_income": (
             r"(?:annual family income|family's annual income|"
-            r"family income|annual income)"
+            r"family income|annual income|family earns)"
             r"\s*(?:is|of|around|about|approximately)?\s*"
             r"(?:₹|rs\.?\s*)?"
             r"(\d[\d,]*(?:\.\d+)?\s*(?:lakhs?|lacs?|thousand|k)?)"
         ),
     }
+
 
     for field, pattern in patterns.items():
         match = re.search(pattern, text)
