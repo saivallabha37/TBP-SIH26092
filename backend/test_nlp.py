@@ -5,6 +5,13 @@ def test_business_purpose():
     assert extract_purpose("I want to open a tailoring shop") == "business"
 
 
+def test_manufacture_furniture_purpose():
+    assert (
+        extract_purpose("I want to manufacture furniture")
+        == "business"
+    )
+
+
 def test_education_purpose():
     assert extract_purpose("I need an education loan") == "education"
 

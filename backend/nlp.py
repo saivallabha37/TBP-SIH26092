@@ -6,8 +6,9 @@ def extract_purpose(text: str) -> str:
     text = text.lower()
 
     if any(word in text for word in [
-        "business", "shop", "tailoring", "enterprise",
-    "bakery", "salon", "workshop", "manufacturing"
+    "business", "shop", "tailoring", "enterprise",
+    "bakery", "salon", "workshop",
+    "manufacture", "furniture"
     ]):
         return "business"
 
