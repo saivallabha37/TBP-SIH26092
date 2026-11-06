@@ -12,13 +12,15 @@ classifier = pipeline(
 candidate_labels = [
     "business or starting an enterprise",
     "education or paying for studies",
-    "agriculture or farming"
+    "agriculture or farming",
+    "a person who has not specified their financial purpose"
 ]
 
 label_mapping = {
     "business or starting an enterprise": "business",
     "education or paying for studies": "education",
-    "agriculture or farming": "agriculture"
+    "agriculture or farming": "agriculture",
+    "a person who has not specified their financial purpose": "unknown"
 }
 
 correct = 0
@@ -37,11 +39,18 @@ for item in examples:
     top_label = result["labels"][0]
     confidence = result["scores"][0]
 
-    predicted = label_mapping[top_label]
+    print("\nAll candidate scores:")
+
+    for label, score in zip(
+        result["labels"],
+        result["scores"]
+    ):
+        
+        print(f"{label}: {score:.4f}")
+        predicted = label_mapping[top_label]
 
     # Experimental fallback for unclear messages.
-    if confidence < 0.5:
-        predicted = "unknown"
+    
 
     is_correct = predicted == expected
 
