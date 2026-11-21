@@ -12,14 +12,20 @@ const { GoogleGenAI } = require('@google/genai');
  * @param {number} retries - Number of retry attempts (default: 3)
  * @returns {Promise<Object>} The Gemini API response
  */
-async function callGeminiWithRetry(ai, modelName, contents, config, retries = 3) {
+async function callGeminiWithRetry(ai, modelName, contents, config, retries = 2) {
   for (let i = 0; i < retries; i++) {
     try {
-      const response = await ai.models.generateContent({
+      const generatePromise = ai.models.generateContent({
         model: modelName,
         contents,
         config,
       });
+
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Gemini API call timed out after 5000ms')), 5000)
+      );
+
+      const response = await Promise.race([generatePromise, timeoutPromise]);
       return response;
     } catch (error) {
       const msg = (error.message || '') + ' ' + (error.stack || '') + ' ' + String(error);
@@ -36,25 +42,26 @@ async function callGeminiWithRetry(ai, modelName, contents, config, retries = 3)
         throw error;
       }
 
-      // Check if it's a 503, high demand, unavailable, or transient server error
+      // Check if it's a 503, timeout, high demand, unavailable, or transient server error
       const isTransient =
         status === 503 ||
         status === 500 ||
         status === 'UNAVAILABLE' ||
         msg.includes('503') ||
+        msg.includes('timed out') ||
         msg.includes('UNAVAILABLE') ||
         msg.includes('high demand') ||
         msg.includes('overloaded');
 
       if (isTransient) {
         if (i === retries - 1) {
-          console.warn(`⚠️ Model ${modelName} call failed after ${retries} attempts due to temporary high demand (503/UNAVAILABLE).`);
+          console.warn(`⚠️ Model ${modelName} call failed after ${retries} attempts due to temporary high demand / timeout.`);
           throw error;
         }
 
-        // Exponential backoff: 1s (i=0), 2s (i=1), 4s (i=2)
+        // Exponential backoff: 1s (i=0), 2s (i=1)
         const waitMs = Math.pow(2, i) * 1000;
-        console.warn(`⚠️ Model ${modelName} experiencing high demand (503/UNAVAILABLE). Retrying in ${waitMs / 1000}s (Attempt ${i + 1} of ${retries})...`);
+        console.warn(`⚠️ Model ${modelName} experiencing high demand or timeout. Retrying in ${waitMs / 1000}s (Attempt ${i + 1} of ${retries})...`);
         await new Promise((resolve) => setTimeout(resolve, waitMs));
       } else {
         throw error;
@@ -122,7 +129,75 @@ const heuristicFallbackExtraction = (rawText) => {
     }
   }
 
-  return { age, gender, category, annual_income, city };
+  // 6. State inference from city or text
+  const CITY_TO_STATE = {
+    hyderabad: 'Telangana',
+    secunderabad: 'Telangana',
+    warangal: 'Telangana',
+    lucknow: 'Uttar Pradesh',
+    kanpur: 'Uttar Pradesh',
+    varanasi: 'Uttar Pradesh',
+    agra: 'Uttar Pradesh',
+    noida: 'Uttar Pradesh',
+    prayagraj: 'Uttar Pradesh',
+    bengaluru: 'Karnataka',
+    bangalore: 'Karnataka',
+    mysuru: 'Karnataka',
+    chennai: 'Tamil Nadu',
+    coimbatore: 'Tamil Nadu',
+    madurai: 'Tamil Nadu',
+    mumbai: 'Maharashtra',
+    pune: 'Maharashtra',
+    nagpur: 'Maharashtra',
+    jaipur: 'Rajasthan',
+    jodhpur: 'Rajasthan',
+    delhi: 'Delhi',
+    kolkata: 'West Bengal',
+    patna: 'Bihar',
+    bhopal: 'Madhya Pradesh',
+    indore: 'Madhya Pradesh',
+    ahmedabad: 'Gujarat',
+    surat: 'Gujarat',
+    kochi: 'Kerala',
+    thiruvananthapuram: 'Kerala',
+    amaravati: 'Andhra Pradesh',
+    visakhapatnam: 'Andhra Pradesh',
+    vijayawada: 'Andhra Pradesh',
+  };
+
+  const INDIAN_STATES = [
+    'Telangana', 'Andhra Pradesh', 'Tamil Nadu', 'Karnataka', 'Kerala',
+    'Uttar Pradesh', 'Maharashtra', 'Rajasthan', 'Delhi', 'West Bengal',
+    'Bihar', 'Madhya Pradesh', 'Gujarat', 'Punjab', 'Haryana', 'Odisha',
+    'Assam', 'Jharkhand', 'Chhattisgarh', 'Uttarakhand', 'Himachal Pradesh',
+    'Jammu and Kashmir', 'Goa'
+  ];
+
+  let state = null;
+  for (const st of INDIAN_STATES) {
+    const reg = new RegExp(`\\b${st}\\b`, 'i');
+    if (reg.test(rawText)) {
+      state = st;
+      break;
+    }
+  }
+  if (!state && city) {
+    state = CITY_TO_STATE[city.toLowerCase()] || null;
+  }
+
+  // 7. Purpose extraction
+  let purpose = null;
+  const purposeMatch =
+    rawText.match(/(?:loan|concessional loan|credit|microfinance|assistance)\s+(?:for|to)\s+([^.,;!?\n]+)/i) ||
+    rawText.match(/(?:want to|looking to|seeking to|need to|plan to)\s+([^.,;!?\n]+)/i) ||
+    rawText.match(/(?:running a|operating a|start a|expand my)\s+([^.,;!?\n]+)/i);
+
+  if (purposeMatch) {
+    purpose = purposeMatch[1].trim().replace(/\s+/g, ' ');
+    if (purpose.length > 80) purpose = purpose.slice(0, 80).trim();
+  }
+
+  return { age, gender, category, annual_income, city, state, purpose };
 };
 
 /**
@@ -131,7 +206,7 @@ const heuristicFallbackExtraction = (rawText) => {
  * If the Gemini API is temporarily unavailable (503), fails gracefully to heuristic extraction.
  * 
  * @param {string} rawText - Natural language input from user
- * @returns {Promise<{ age: number|null, gender: string|null, category: string|null, annual_income: number|null, city: string|null }>}
+ * @returns {Promise<{ age: number|null, gender: string|null, category: string|null, annual_income: number|null, city: string|null, state: string|null, purpose: string|null }>}
  */
 const extractDemographicsFromText = async (rawText) => {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -156,7 +231,9 @@ CRITICAL SECURITY & PRIVACY RULES:
      "gender": string or null (e.g. "Male", "Female", "Transgender", "Other"),
      "category": string or null (e.g. "SC", "ST", "OBC", "Safai Karamchari", "General", "DNT"),
      "annual_income": number or null,
-     "city": string or null (extract ONLY the city/town/district name, strip street/colony/house details)
+     "city": string or null (extract ONLY the city/town/district name, strip street/colony/house details),
+     "state": string or null (infer Indian State from city or text, e.g. "Telangana", "Uttar Pradesh", "Tamil Nadu", "Karnataka", "Maharashtra", "Rajasthan", "Delhi"),
+     "purpose": string or null (concise 3-8 word phrase describing business, equipment, trade, or educational goal)
    }
 3. CURRENCY CONVERSION RULE:
    Convert Indian numbering expressions into full annual numerical integers:
@@ -192,12 +269,45 @@ CRITICAL SECURITY & PRIVACY RULES:
     const cleanedText = responseText.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
     const parsedData = JSON.parse(cleanedText);
 
+    const city = parsedData.city ? String(parsedData.city).trim() : null;
+    let state = parsedData.state ? String(parsedData.state).trim() : null;
+    if (!state && city) {
+      const CITY_TO_STATE = {
+        hyderabad: 'Telangana',
+        secunderabad: 'Telangana',
+        warangal: 'Telangana',
+        lucknow: 'Uttar Pradesh',
+        kanpur: 'Uttar Pradesh',
+        varanasi: 'Uttar Pradesh',
+        agra: 'Uttar Pradesh',
+        noida: 'Uttar Pradesh',
+        bengaluru: 'Karnataka',
+        bangalore: 'Karnataka',
+        mysuru: 'Karnataka',
+        chennai: 'Tamil Nadu',
+        coimbatore: 'Tamil Nadu',
+        madurai: 'Tamil Nadu',
+        mumbai: 'Maharashtra',
+        pune: 'Maharashtra',
+        nagpur: 'Maharashtra',
+        jaipur: 'Rajasthan',
+        delhi: 'Delhi',
+        kolkata: 'West Bengal',
+        patna: 'Bihar',
+        kochi: 'Kerala',
+        amaravati: 'Andhra Pradesh',
+      };
+      state = CITY_TO_STATE[city.toLowerCase()] || null;
+    }
+
     return {
       age: typeof parsedData.age === 'number' ? parsedData.age : null,
       gender: parsedData.gender ? String(parsedData.gender).trim() : null,
       category: parsedData.category ? String(parsedData.category).toUpperCase().trim() : null,
       annual_income: typeof parsedData.annual_income === 'number' ? parsedData.annual_income : null,
-      city: parsedData.city ? String(parsedData.city).trim() : null,
+      city,
+      state,
+      purpose: parsedData.purpose ? String(parsedData.purpose).trim() : null,
     };
   } catch (error) {
     console.warn(`⚠️ Gemini Demographic Extraction unavailable (${error.message}). Using resilient fallback extraction.`);

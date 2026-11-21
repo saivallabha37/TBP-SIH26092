@@ -23,6 +23,14 @@ const demographicsSchema = new mongoose.Schema(
       type: String,
       trim: true,
     },
+    state: {
+      type: String,
+      trim: true,
+    },
+    purpose: {
+      type: String,
+      trim: true,
+    },
   },
   { _id: false }
 );
@@ -50,7 +58,12 @@ const userSchema = new mongoose.Schema(
   }
 );
 
+// Method to verify if demographics profile has minimum required details
+userSchema.methods.hasCompleteProfile = function () {
+  const d = this.demographics;
+  return !!(d && d.age && d.category && d.annual_income !== undefined);
+};
+
 const User = mongoose.model('User', userSchema);
 
 module.exports = User;
-
